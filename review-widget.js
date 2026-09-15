@@ -2,18 +2,19 @@
  * VideoReviewWidget — Drop-in timestamped video review tool
  * No dependencies. One file. Works inside any page.
  *
- * Usage:
- *   <div id="video-review-widget"></div>
- *   <script src="review-widget.js"></script>
- *   <script>
- *     ReviewWidget.init({
- *       container: '#video-review-widget',
- *       video: 'videos/my_video.mp4',
- *       fps: 24,
- *       project: 'Project Name',
- *       client: 'Client Name'
- *     });
- *   </script>
+ * Usage (legacy — hardcoded values):
+ *   ReviewWidget.init({
+ *     container: '#video-review-widget',
+ *     video: 'videos/my_video.mp4',
+ *     fps: 24,
+ *     project: 'Project Name',
+ *     client: 'Client Name'
+ *   });
+ *
+ * Usage (JSON load — editor sends a Client Review JSON):
+ *   ReviewWidget.init({
+ *     container: '#video-review-widget'
+ *   });
  */
 
 const ReviewWidget = (() => {
@@ -35,6 +36,16 @@ const ReviewWidget = (() => {
   let commentInputWrap = null;
   let pendingTimecode = null;
   let pendingFrame = null;
+  let containerEl = null;
+
+  // config round-trip fields (carried from editor's JSON → client export)
+  let configTimeline = '';
+  let configInFrame = null;
+  let configOutFrame = null;
+  let configInTC = '';
+  let configOutTC = '';
+  let configObservations = '';
+  let configCommentsToClient = '';
 
   // ─── helpers ────────────────────────────────────────────────────────
 
@@ -92,6 +103,71 @@ const ReviewWidget = (() => {
       }
 
       .vrw-root * { box-sizing: border-box; }
+
+      /* ── drop zone / load screen ── */
+      .vrw-dropzone {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        min-height: 300px;
+        padding: 40px 20px;
+        text-align: center;
+      }
+      .vrw-dropzone-icon {
+        font-size: 48px;
+        margin-bottom: 16px;
+        opacity: 0.7;
+      }
+      .vrw-dropzone-title {
+        font-size: 18px;
+        font-weight: 600;
+        color: #e0e0e0;
+        margin-bottom: 8px;
+      }
+      .vrw-dropzone-subtitle {
+        font-size: 14px;
+        color: #888;
+        margin-bottom: 20px;
+      }
+      .vrw-dropzone-or {
+        font-size: 13px;
+        color: #666;
+        margin: 12px 0;
+      }
+      .vrw-dropzone.vrw-dragover {
+        background: #1a3a5c;
+        outline: 2px dashed #2b7de9;
+        outline-offset: -8px;
+      }
+      .vrw-root.vrw-dragover {
+        outline: 2px dashed #2b7de9;
+        outline-offset: -4px;
+      }
+
+      /* ── editor message panel ── */
+      .vrw-editor-message {
+        background: #252530;
+        border-left: 3px solid #2b7de9;
+        padding: 10px 14px;
+        margin: 0;
+        font-size: 13px;
+        color: #bbb;
+        max-height: 150px;
+        overflow-y: auto;
+      }
+      .vrw-editor-message-label {
+        font-size: 11px;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+        color: #2b7de9;
+        margin-bottom: 4px;
+        font-weight: 600;
+      }
+      .vrw-editor-message-text {
+        white-space: pre-wrap;
+        word-break: break-word;
+      }
 
       /* ── video ── */
       .vrw-video-wrap {
@@ -253,16 +329,68 @@ const ReviewWidget = (() => {
         white-space: pre-wrap;
         word-break: break-word;
       }
+      .vrw-comment-actions {
+        display: flex;
+        gap: 2px;
+        flex-shrink: 0;
+      }
+      .vrw-comment-edit,
       .vrw-comment-delete {
         background: none;
         border: none;
         color: #666;
         cursor: pointer;
-        font-size: 16px;
+        font-size: 14px;
         padding: 0 4px;
         line-height: 1;
       }
+      .vrw-comment-edit:hover { color: #2b7de9; }
       .vrw-comment-delete:hover { color: #e55; }
+
+      /* inline edit mode */
+      .vrw-edit-area {
+        flex: 1;
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+      }
+      .vrw-edit-textarea {
+        width: 100%;
+        min-height: 50px;
+        padding: 6px;
+        background: #d0d0d0;
+        color: #000;
+        border: 1px solid #2b7de9;
+        border-radius: 4px;
+        font-family: inherit;
+        font-size: 13px;
+        resize: vertical;
+      }
+      .vrw-edit-textarea:focus {
+        outline: none;
+        border-color: #1a6ad4;
+      }
+      .vrw-edit-btns {
+        display: flex;
+        gap: 4px;
+      }
+      .vrw-edit-btns button {
+        padding: 3px 10px;
+        font-size: 12px;
+        border-radius: 3px;
+        border: none;
+        cursor: pointer;
+      }
+      .vrw-edit-save {
+        background: #2b7de9;
+        color: #fff;
+      }
+      .vrw-edit-save:hover { background: #1a6ad4; }
+      .vrw-edit-cancel {
+        background: #444;
+        color: #ccc;
+      }
+      .vrw-edit-cancel:hover { background: #555; }
 
       /* ── footer ── */
       .vrw-footer {
@@ -278,6 +406,11 @@ const ReviewWidget = (() => {
         gap: 6px;
       }
 
+      .vrw-footer-buttons {
+        display: flex;
+        gap: 6px;
+      }
+
       /* ── empty state ── */
       .vrw-empty {
         padding: 20px 12px;
@@ -287,16 +420,162 @@ const ReviewWidget = (() => {
         font-style: italic;
       }
 
+      /* ── export confirmation ── */
+      .vrw-export-confirm {
+        padding: 10px 14px;
+        background: #1a5c2a;
+        color: #d0f0d0;
+        font-size: 13px;
+        text-align: center;
+        transition: opacity 0.4s;
+      }
+
+      /* ── keyboard help ── */
+      .vrw-keyboard-help {
+        padding: 8px 12px;
+        background: #252525;
+        border-top: 1px solid #333;
+        font-size: 12px;
+        color: #777;
+      }
+      .vrw-keyboard-help strong {
+        color: #aaa;
+      }
+      .vrw-kbd {
+        display: inline-block;
+        background: #3a3a3a;
+        border: 1px solid #555;
+        border-radius: 3px;
+        padding: 1px 6px;
+        font-family: inherit;
+        font-size: 11px;
+        color: #ccc;
+        margin: 0 1px;
+      }
+
       /* ── responsive ── */
       @media (max-width: 600px) {
         .vrw-controls { gap: 4px; padding: 6px 8px; }
         .vrw-btn { padding: 6px 10px; font-size: 12px; }
         .vrw-timecode { font-size: 12px; min-width: 90px; }
+        .vrw-dropzone { min-height: 220px; padding: 24px 16px; }
+        .vrw-dropzone-icon { font-size: 36px; }
       }
     `;
     const style = el('style', { id: 'vrw-styles' });
     style.textContent = css;
     document.head.appendChild(style);
+  }
+
+  // ─── JSON load screen ──────────────────────────────────────────────
+
+  function showLoadScreen() {
+    const root = el('div', { className: 'vrw-root' });
+
+    const dropzone = el('div', { className: 'vrw-dropzone' });
+
+    dropzone.appendChild(el('div', { className: 'vrw-dropzone-icon', textContent: '📂' }));
+    dropzone.appendChild(el('div', { className: 'vrw-dropzone-title', textContent: 'Load Review File' }));
+    dropzone.appendChild(el('div', { className: 'vrw-dropzone-subtitle', textContent: 'Drag & drop the Client Review JSON file here' }));
+
+    // file input (hidden)
+    const fileInput = el('input', { type: 'file', accept: '.json' });
+    fileInput.style.display = 'none';
+    fileInput.addEventListener('change', () => {
+      if (fileInput.files && fileInput.files[0]) {
+        loadJSONFile(fileInput.files[0]);
+      }
+    });
+
+    dropzone.appendChild(el('div', { className: 'vrw-dropzone-or', textContent: '— or —' }));
+    dropzone.appendChild(el('button', {
+      className: 'vrw-btn',
+      textContent: 'Choose File…',
+      onClick: () => fileInput.click()
+    }));
+    dropzone.appendChild(fileInput);
+
+    // drag events
+    dropzone.addEventListener('dragover', (e) => {
+      e.preventDefault();
+      dropzone.classList.add('vrw-dragover');
+    });
+    dropzone.addEventListener('dragleave', () => {
+      dropzone.classList.remove('vrw-dragover');
+    });
+    dropzone.addEventListener('drop', (e) => {
+      e.preventDefault();
+      dropzone.classList.remove('vrw-dragover');
+      if (e.dataTransfer.files && e.dataTransfer.files[0]) {
+        loadJSONFile(e.dataTransfer.files[0]);
+      }
+    });
+
+    root.appendChild(dropzone);
+    containerEl.innerHTML = '';
+    containerEl.appendChild(root);
+  }
+
+  function loadJSONFile(file) {
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      try {
+        const data = JSON.parse(e.target.result);
+        if (!data.video) {
+          alert('Invalid review file: no "video" field found.');
+          return;
+        }
+        applyConfig(data);
+        buildReviewUI();
+      } catch (err) {
+        alert('Could not read JSON file:\n' + err.message);
+      }
+    };
+    reader.onerror = () => {
+      alert('Error reading file.');
+    };
+    reader.readAsText(file);
+  }
+
+  function loadNewJSONWithWarning(file) {
+    if (comments.length > 0) {
+      const ok = confirm(
+        'You have ' + comments.length + ' unsaved comment' +
+        (comments.length === 1 ? '' : 's') +
+        '.\n\nExport them first, or click OK to discard and load the new file.'
+      );
+      if (!ok) return;
+    }
+    comments = [];
+    commentIdCounter = 0;
+    loadJSONFile(file);
+  }
+
+  function openNewJSONPicker() {
+    const input = el('input', { type: 'file', accept: '.json' });
+    input.style.display = 'none';
+    input.addEventListener('change', () => {
+      if (input.files && input.files[0]) {
+        loadNewJSONWithWarning(input.files[0]);
+      }
+      input.remove();
+    });
+    document.body.appendChild(input);
+    input.click();
+  }
+
+  function applyConfig(data) {
+    projectName = data.project || '';
+    clientName = data.client || '';
+    videoSrc = data.video || '';
+    fps = data.fps || 24;
+    configTimeline = data.timeline || '';
+    configInFrame = data.inFrame != null ? data.inFrame : null;
+    configOutFrame = data.outFrame != null ? data.outFrame : null;
+    configInTC = data.inTC || '';
+    configOutTC = data.outTC || '';
+    configObservations = data.observations || '';
+    configCommentsToClient = data.commentsToClient || '';
   }
 
   // ─── progress bar & dots ────────────────────────────────────────────
@@ -338,6 +617,59 @@ const ReviewWidget = (() => {
 
   // ─── comment list ───────────────────────────────────────────────────
 
+  function enterEditMode(item, c) {
+    if (item.querySelector('.vrw-edit-area')) return;
+
+    const textSpan = item.querySelector('.vrw-comment-text');
+    const actions = item.querySelector('.vrw-comment-actions');
+    textSpan.style.display = 'none';
+    actions.style.display = 'none';
+
+    const textarea = el('textarea', { className: 'vrw-edit-textarea' });
+    textarea.value = c.text;
+
+    const saveBtn = el('button', { className: 'vrw-edit-save', textContent: 'Save' });
+    const cancelBtn = el('button', { className: 'vrw-edit-cancel', textContent: 'Cancel' });
+
+    saveBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const newText = textarea.value.trim();
+      if (newText) {
+        comments = comments.map(x => x.id === c.id ? { ...x, text: newText } : x);
+      }
+      renderComments();
+      renderDots();
+    });
+
+    cancelBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      editArea.remove();
+      textSpan.style.display = '';
+      actions.style.display = '';
+    });
+
+    const editArea = el('div', { className: 'vrw-edit-area' }, [
+      textarea,
+      el('div', { className: 'vrw-edit-btns' }, [saveBtn, cancelBtn])
+    ]);
+
+    textSpan.parentNode.insertBefore(editArea, textSpan.nextSibling);
+    textarea.focus();
+    textarea.selectionStart = textarea.value.length;
+
+    textarea.addEventListener('keydown', (e) => {
+      e.stopPropagation();
+      if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+        e.preventDefault();
+        saveBtn.click();
+      }
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        cancelBtn.click();
+      }
+    });
+  }
+
   function renderComments() {
     commentList.innerHTML = '';
     if (comments.length === 0) {
@@ -350,29 +682,51 @@ const ReviewWidget = (() => {
 
     const sorted = [...comments].sort((a, b) => a.seconds - b.seconds);
     sorted.forEach(c => {
+      const textSpan = el('span', { className: 'vrw-comment-text', textContent: c.text });
+      const editBtn = el('button', {
+        className: 'vrw-comment-edit',
+        title: 'Edit comment',
+        textContent: 'Edit',
+      });
+      const deleteBtn = el('button', {
+        className: 'vrw-comment-delete',
+        title: 'Delete comment',
+        textContent: '✕',
+      });
+      const actions = el('div', { className: 'vrw-comment-actions' }, [editBtn, deleteBtn]);
+
       const item = el('li', {
         className: 'vrw-comment-item',
         'data-id': c.id,
-        onClick: () => {
-          video.currentTime = c.seconds;
-          video.pause();
-          updateProgress();
-        }
       }, [
         el('span', { className: 'vrw-comment-tc', textContent: c.timecode }),
-        el('span', { className: 'vrw-comment-text', textContent: c.text }),
-        el('button', {
-          className: 'vrw-comment-delete',
-          title: 'Delete comment',
-          textContent: '✕',
-          onClick: (e) => {
-            e.stopPropagation();
-            comments = comments.filter(x => x.id !== c.id);
-            renderComments();
-            renderDots();
-          }
-        })
+        textSpan,
+        actions
       ]);
+
+      item.addEventListener('click', () => {
+        video.currentTime = c.seconds;
+        video.pause();
+        updateProgress();
+      });
+
+      textSpan.addEventListener('dblclick', (e) => {
+        e.stopPropagation();
+        enterEditMode(item, c);
+      });
+
+      editBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        enterEditMode(item, c);
+      });
+
+      deleteBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        comments = comments.filter(x => x.id !== c.id);
+        renderComments();
+        renderDots();
+      });
+
       commentList.appendChild(item);
     });
 
@@ -484,14 +838,29 @@ const ReviewWidget = (() => {
 
   // ─── export ─────────────────────────────────────────────────────────
 
-  function downloadJSON() {
+  function exportJSON() {
     if (!comments.length) return;
+
+    // prompt for filename
+    const defaultName = (projectName || 'review').replace(/\s+/g, '_') + '_comments';
+    const userInput = prompt('Save comments as:', defaultName);
+    if (!userInput) return; // cancelled
+
+    // ensure .json extension
+    const fileName = userInput.endsWith('.json') ? userInput : userInput + '.json';
+
     const sorted = [...comments].sort((a, b) => a.seconds - b.seconds);
     const output = {
       project: projectName,
       client: clientName,
+      timeline: configTimeline,
       video: videoSrc,
       fps: fps,
+      inFrame: configInFrame,
+      outFrame: configOutFrame,
+      inTC: configInTC,
+      outTC: configOutTC,
+      observations: configObservations,
       exportDate: new Date().toISOString(),
       comments: sorted.map(c => ({
         timecode: c.timecode,
@@ -504,11 +873,29 @@ const ReviewWidget = (() => {
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = (projectName || 'review').replace(/\s+/g, '_') + '_comments.json';
+    a.download = fileName;
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
     URL.revokeObjectURL(url);
+
+    // confirmation
+    showExportConfirm(fileName);
+  }
+
+  function showExportConfirm(fileName) {
+    // find the root element and show a temporary banner
+    const root = containerEl.querySelector('.vrw-root');
+    if (!root) return;
+    const banner = el('div', {
+      className: 'vrw-export-confirm',
+      textContent: 'Exported as ' + fileName + ' — check your Downloads folder'
+    });
+    root.appendChild(banner);
+    setTimeout(() => {
+      banner.style.opacity = '0';
+      setTimeout(() => banner.remove(), 400);
+    }, 4000);
   }
 
   // ─── keyboard shortcuts ─────────────────────────────────────────────
@@ -536,27 +923,19 @@ const ReviewWidget = (() => {
     }
   }
 
-  // ─── build the widget ───────────────────────────────────────────────
+  // ─── build the review interface ────────────────────────────────────
 
-  function init(opts) {
-    injectStyles();
-
-    const container = typeof opts.container === 'string'
-      ? document.querySelector(opts.container)
-      : opts.container;
-
-    if (!container) {
-      console.error('ReviewWidget: container not found');
-      return;
-    }
-
-    fps = opts.fps || 24;
-    projectName = opts.project || '';
-    clientName = opts.client || '';
-    videoSrc = opts.video || '';
-
-    // root
+  function buildReviewUI() {
     const root = el('div', { className: 'vrw-root' });
+
+    // editor message panel (if commentsToClient is present)
+    if (configCommentsToClient) {
+      const msgPanel = el('div', { className: 'vrw-editor-message' }, [
+        el('div', { className: 'vrw-editor-message-label', textContent: 'Message from editor' }),
+        el('div', { className: 'vrw-editor-message-text', textContent: configCommentsToClient })
+      ]);
+      root.appendChild(msgPanel);
+    }
 
     // video
     const videoWrap = el('div', { className: 'vrw-video-wrap' });
@@ -626,26 +1005,90 @@ const ReviewWidget = (() => {
     root.appendChild(commentList);
     renderComments();
 
+    // keyboard help
+    const kbHelp = el('div', { className: 'vrw-keyboard-help' });
+    kbHelp.innerHTML = '<strong>Keyboard shortcuts:</strong> ' +
+      '<span class="vrw-kbd">Space</span> Play/Pause &nbsp; ' +
+      '<span class="vrw-kbd">←</span> Step back one frame &nbsp; ' +
+      '<span class="vrw-kbd">→</span> Step forward one frame &nbsp; ' +
+      '<span class="vrw-kbd">C</span> Add comment';
+    root.appendChild(kbHelp);
+
     // footer
     const info = [projectName, clientName].filter(Boolean).join(' — ') || 'Video Review';
     const footer = el('div', { className: 'vrw-footer' }, [
       el('span', { textContent: info }),
-      el('span', {}, [
+      el('span', { className: 'vrw-footer-buttons' }, [
+        el('button', {
+          className: 'vrw-btn vrw-btn-secondary',
+          textContent: '📂 Open New',
+          title: 'Load a different review JSON',
+          onClick: openNewJSONPicker
+        }),
         el('button', {
           className: 'vrw-btn',
-          textContent: '⬇ Download Comments (JSON)',
-          onClick: downloadJSON
+          textContent: '⬇ Export Comments (JSON)',
+          onClick: exportJSON
         })
       ])
     ]);
     root.appendChild(footer);
 
+    // drag & drop JSON onto the review UI
+    root.addEventListener('dragover', (e) => {
+      e.preventDefault();
+      root.classList.add('vrw-dragover');
+    });
+    root.addEventListener('dragleave', (e) => {
+      if (!root.contains(e.relatedTarget)) {
+        root.classList.remove('vrw-dragover');
+      }
+    });
+    root.addEventListener('drop', (e) => {
+      e.preventDefault();
+      root.classList.remove('vrw-dragover');
+      if (e.dataTransfer.files && e.dataTransfer.files[0]) {
+        const file = e.dataTransfer.files[0];
+        if (file.name.endsWith('.json')) {
+          loadNewJSONWithWarning(file);
+        }
+      }
+    });
+
     // keyboard
     document.addEventListener('keydown', handleKeys);
 
     // mount
-    container.innerHTML = '';
-    container.appendChild(root);
+    containerEl.innerHTML = '';
+    containerEl.appendChild(root);
+  }
+
+  // ─── init ──────────────────────────────────────────────────────────
+
+  function init(opts) {
+    injectStyles();
+
+    containerEl = typeof opts.container === 'string'
+      ? document.querySelector(opts.container)
+      : opts.container;
+
+    if (!containerEl) {
+      console.error('ReviewWidget: container not found');
+      return;
+    }
+
+    // Legacy mode: if video is provided directly, skip load screen
+    if (opts.video) {
+      fps = opts.fps || 24;
+      projectName = opts.project || '';
+      clientName = opts.client || '';
+      videoSrc = opts.video;
+      buildReviewUI();
+      return;
+    }
+
+    // JSON-load mode: show drop zone
+    showLoadScreen();
   }
 
   return { init };

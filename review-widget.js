@@ -939,7 +939,7 @@ const ReviewWidget = (() => {
 
     // video
     const videoWrap = el('div', { className: 'vrw-video-wrap' });
-    video = el('video', { src: videoSrc, preload: 'auto' });
+    video = el('video', { src: videoSrc, preload: 'metadata', playsinline: '', 'webkit-playsinline': '' });
     video.addEventListener('timeupdate', updateProgress);
     video.addEventListener('loadedmetadata', () => {
       updateProgress();

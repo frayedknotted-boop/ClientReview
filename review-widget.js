@@ -37,6 +37,8 @@ const ReviewWidget = (() => {
   let pendingTimecode = null;
   let pendingFrame = null;
   let containerEl = null;
+  let loadingOverlay = null;
+  let progressBuffered = null;
 
   // config round-trip fields (carried from editor's JSON → client export)
   let configTimeline = '';
@@ -180,6 +182,41 @@ const ReviewWidget = (() => {
         display: block;
       }
 
+      /* ── loading overlay ── */
+      .vrw-loading-overlay {
+        position: absolute;
+        top: 0; left: 0; right: 0; bottom: 0;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background: rgba(0, 0, 0, 0.5);
+        z-index: 10;
+        opacity: 0;
+        pointer-events: none;
+        transition: opacity 0.25s;
+      }
+      .vrw-loading-overlay.vrw-visible {
+        opacity: 1;
+        pointer-events: auto;
+      }
+      .vrw-spinner {
+        width: 48px;
+        height: 48px;
+        border: 4px solid rgba(255, 255, 255, 0.2);
+        border-top-color: #2b7de9;
+        border-radius: 50%;
+        animation: vrw-spin 0.8s linear infinite;
+      }
+      .vrw-loading-label {
+        color: #ccc;
+        font-size: 13px;
+        margin-top: 10px;
+        text-align: center;
+      }
+      @keyframes vrw-spin {
+        to { transform: rotate(360deg); }
+      }
+
       /* ── progress bar ── */
       .vrw-progress-wrap {
         position: relative;
@@ -187,6 +224,14 @@ const ReviewWidget = (() => {
         background: #333;
         cursor: pointer;
         user-select: none;
+      }
+      .vrw-progress-buffered {
+        height: 100%;
+        background: rgba(255, 255, 255, 0.15);
+        width: 0%;
+        pointer-events: none;
+        position: absolute;
+        top: 0; left: 0;
       }
       .vrw-progress-filled {
         height: 100%;
@@ -588,6 +633,26 @@ const ReviewWidget = (() => {
     highlightActiveComment();
   }
 
+  function updateBuffered() {
+    if (!video || !video.duration || !progressBuffered) return;
+    const buf = video.buffered;
+    if (buf.length > 0) {
+      // show the furthest buffered point
+      const end = buf.end(buf.length - 1);
+      const pct = (end / video.duration) * 100;
+      progressBuffered.style.width = pct + '%';
+    }
+  }
+
+  function showLoading(show) {
+    if (!loadingOverlay) return;
+    if (show) {
+      loadingOverlay.classList.add('vrw-visible');
+    } else {
+      loadingOverlay.classList.remove('vrw-visible');
+    }
+  }
+
   function seekFromClick(e) {
     const rect = progressBar.getBoundingClientRect();
     const pct = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
@@ -939,19 +1004,36 @@ const ReviewWidget = (() => {
 
     // video
     const videoWrap = el('div', { className: 'vrw-video-wrap' });
-    video = el('video', { src: videoSrc, preload: 'metadata', playsinline: '', 'webkit-playsinline': '' });
+    video = el('video', { src: videoSrc, preload: 'auto', playsinline: '', 'webkit-playsinline': '' });
     video.addEventListener('timeupdate', updateProgress);
     video.addEventListener('loadedmetadata', () => {
       updateProgress();
       renderDots();
     });
+
+    // buffering events
+    video.addEventListener('waiting', () => showLoading(true));
+    video.addEventListener('playing', () => showLoading(false));
+    video.addEventListener('canplay', () => showLoading(false));
+    video.addEventListener('progress', updateBuffered);
+
+    // loading overlay
+    loadingOverlay = el('div', { className: 'vrw-loading-overlay' }, [
+      el('div', { style: 'display:flex;flex-direction:column;align-items:center;' }, [
+        el('div', { className: 'vrw-spinner' }),
+        el('div', { className: 'vrw-loading-label', textContent: 'Buffering…' })
+      ])
+    ]);
     videoWrap.appendChild(video);
+    videoWrap.appendChild(loadingOverlay);
     root.appendChild(videoWrap);
 
     // progress bar
     progressBar = el('div', { className: 'vrw-progress-wrap', onClick: seekFromClick });
+    progressBuffered = el('div', { className: 'vrw-progress-buffered' });
     progressFilled = el('div', { className: 'vrw-progress-filled' });
     dotLayer = el('div', { className: 'vrw-dot-layer' });
+    progressBar.appendChild(progressBuffered);
     progressBar.appendChild(progressFilled);
     progressBar.appendChild(dotLayer);
 
@@ -1063,10 +1145,25 @@ const ReviewWidget = (() => {
     containerEl.appendChild(root);
   }
 
+  // ─── favicon ────────────────────────────────────────────────────────
+
+  const DEFAULT_FAVICON = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAAFSWlUWHRYTUw6Y29tLmFkb2JlLnhtcAAAAAAAPD94cGFja2V0IGJlZ2luPSLvu78iIGlkPSJXNU0wTXBDZWhpSHpyZVN6TlRjemtjOWQiPz4KPHg6eG1wbWV0YSB4bWxuczp4PSJhZG9iZTpuczptZXRhLyIgeDp4bXB0az0iWE1QIENvcmUgNS41LjAiPgogPHJkZjpSREYgeG1sbnM6cmRmPSJodHRwOi8vd3d3LnczLm9yZy8xOTk5LzAyLzIyLXJkZi1zeW50YXgtbnMjIj4KICA8cmRmOkRlc2NyaXB0aW9uIHJkZjphYm91dD0iIgogICAgeG1sbnM6ZGM9Imh0dHA6Ly9wdXJsLm9yZy9kYy9lbGVtZW50cy8xLjEvIgogICAgeG1sbnM6ZXhpZj0iaHR0cDovL25zLmFkb2JlLmNvbS9leGlmLzEuMC8iCiAgICB4bWxuczp0aWZmPSJodHRwOi8vbnMuYWRvYmUuY29tL3RpZmYvMS4wLyIKICAgIHhtbG5zOnBob3Rvc2hvcD0iaHR0cDovL25zLmFkb2JlLmNvbS9waG90b3Nob3AvMS4wLyIKICAgIHhtbG5zOnhtcD0iaHR0cDovL25zLmFkb2JlLmNvbS94YXAvMS4wLyIKICAgIHhtbG5zOnhtcE1NPSJodHRwOi8vbnMuYWRvYmUuY29tL3hhcC8xLjAvbW0vIgogICAgeG1sbnM6c3RFdnQ9Imh0dHA6Ly9ucy5hZG9iZS5jb20veGFwLzEuMC9zVHlwZS9SZXNvdXJjZUV2ZW50IyIKICAgZXhpZjpQaXhlbFhEaW1lbnNpb249IjMyIgogICBleGlmOlBpeGVsWURpbWVuc2lvbj0iMzIiCiAgIGV4aWY6Q29sb3JTcGFjZT0iMSIKICAgdGlmZjpJbWFnZVdpZHRoPSIzMiIKICAgdGlmZjpJbWFnZUxlbmd0aD0iMzIiCiAgIHRpZmY6UmVzb2x1dGlvblVuaXQ9IjIiCiAgIHRpZmY6WFJlc29sdXRpb249IjcyLzEiCiAgIHRpZmY6WVJlc29sdXRpb249IjcyLzEiCiAgIHBob3Rvc2hvcDpDb2xvck1vZGU9IjMiCiAgIHBob3Rvc2hvcDpJQ0NQcm9maWxl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';
+
+  function injectFavicon(customFavicon) {
+    // if the host page already has a favicon, leave it alone
+    if (document.querySelector('link[rel="icon"], link[rel="shortcut icon"]')) return;
+    const link = document.createElement('link');
+    link.rel = 'icon';
+    link.type = 'image/png';
+    link.href = customFavicon || DEFAULT_FAVICON;
+    document.head.appendChild(link);
+  }
+
   // ─── init ──────────────────────────────────────────────────────────
 
   function init(opts) {
     injectStyles();
+    injectFavicon(opts.favicon);
 
     containerEl = typeof opts.container === 'string'
       ? document.querySelector(opts.container)
